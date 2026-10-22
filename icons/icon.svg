@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" role="img" aria-label="Parcel Measure">
+  <rect width="192" height="192" rx="34" fill="#101114"/>
+  <!-- parcel -->
+  <path d="M52 74 L96 52 L140 74 L140 128 L96 150 L52 128 Z" fill="none" stroke="#EE4D2D" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M52 74 L96 96 L140 74 M96 96 L96 150" fill="none" stroke="#EE4D2D" stroke-width="8" stroke-linejoin="round"/>
+  <!-- scale sticker -->
+  <rect x="112" y="30" width="44" height="44" rx="6" fill="#101114" stroke="#3ecf8e" stroke-width="7"/>
+  <rect x="122" y="40" width="10" height="10" fill="#3ecf8e"/>
+  <rect x="136" y="40" width="10" height="10" fill="#3ecf8e"/>
+  <rect x="122" y="54" width="10" height="10" fill="#3ecf8e"/>
+  <rect x="136" y="54" width="10" height="10" fill="#3ecf8e"/>
+  <!-- dimension ticks -->
+  <path d="M52 166 L140 166" stroke="#f2f3f5" stroke-width="5" stroke-linecap="round"/>
+  <path d="M52 158 L52 174 M140 158 L140 174" stroke="#f2f3f5" stroke-width="5" stroke-linecap="round"/>
+</svg>

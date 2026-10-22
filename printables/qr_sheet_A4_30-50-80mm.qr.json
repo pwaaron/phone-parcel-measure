@@ -1,0 +1,111 @@
+{
+  "kind": "qr-sheet",
+  "schema": 1,
+  "paper": "A4",
+  "dpi": 300,
+  "createdUtc": "2026-10-22T07:21:15Z",
+  "codes": [
+    {
+      "id": "A",
+      "text": "SPXM|1|A|30",
+      "sizeMm": 30.0,
+      "xMm": 15.714,
+      "yMm": 24.714,
+      "page": 1
+    },
+    {
+      "id": "A",
+      "text": "SPXM|1|A|30",
+      "sizeMm": 30.0,
+      "xMm": 63.143,
+      "yMm": 24.714,
+      "page": 1
+    },
+    {
+      "id": "A",
+      "text": "SPXM|1|A|30",
+      "sizeMm": 30.0,
+      "xMm": 110.571,
+      "yMm": 24.714,
+      "page": 1
+    },
+    {
+      "id": "A",
+      "text": "SPXM|1|A|30",
+      "sizeMm": 30.0,
+      "xMm": 158.0,
+      "yMm": 24.714,
+      "page": 1
+    },
+    {
+      "id": "B",
+      "text": "SPXM|1|B|50",
+      "sizeMm": 50.0,
+      "xMm": 19.524,
+      "yMm": 81.952,
+      "page": 1
+    },
+    {
+      "id": "B",
+      "text": "SPXM|1|B|50",
+      "sizeMm": 50.0,
+      "xMm": 94.571,
+      "yMm": 81.952,
+      "page": 1
+    },
+    {
+      "id": "B",
+      "text": "SPXM|1|B|50",
+      "sizeMm": 50.0,
+      "xMm": 19.524,
+      "yMm": 163.0,
+      "page": 1
+    },
+    {
+      "id": "B",
+      "text": "SPXM|1|B|50",
+      "sizeMm": 50.0,
+      "xMm": 94.571,
+      "yMm": 163.0,
+      "page": 1
+    },
+    {
+      "id": "C",
+      "text": "SPXM|1|C|80",
+      "sizeMm": 80.0,
+      "xMm": 25.238,
+      "yMm": 34.238,
+      "page": 2
+    },
+    {
+      "id": "C",
+      "text": "SPXM|1|C|80",
+      "sizeMm": 80.0,
+      "xMm": 25.238,
+      "yMm": 156.714,
+      "page": 2
+    },
+    {
+      "id": "C",
+      "text": "SPXM|1|C|80",
+      "sizeMm": 80.0,
+      "xMm": 25.238,
+      "yMm": 34.238,
+      "page": 3
+    },
+    {
+      "id": "C",
+      "text": "SPXM|1|C|80",
+      "sizeMm": 80.0,
+      "xMm": 25.238,
+      "yMm": 156.714,
+      "page": 3
+    }
+  ],
+  "files": [
+    "qr_sheet_A4_30-50-80mm.pdf",
+    "qr_sheet_A4_30-50-80mm.png",
+    "qr_sheet_A4_30-50-80mm.p2.png",
+    "qr_sheet_A4_30-50-80mm.p3.png"
+  ]
+}

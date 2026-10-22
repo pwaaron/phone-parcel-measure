@@ -1,0 +1,17 @@
+{
+  "kind": "charuco",
+  "schema": 1,
+  "boardId": "charuco-8x6-23.5mm",
+  "dictionary": "DICT_4X4_50",
+  "squaresX": 8,
+  "squaresY": 6,
+  "squareLengthMm": 23.5,
+  "markerLengthMm": 11.75,
+  "paper": "A4",
+  "dpi": 300,
+  "createdUtc": "2026-10-22T07:21:11Z",
+  "files": [
+    "charuco_A4_8x6_23.5mm.pdf",
+    "charuco_A4_8x6_23.5mm.png"
+  ]
+}

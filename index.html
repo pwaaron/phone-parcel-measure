@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#EE4D2D">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Parcel Measure</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<header class="bar">
+  <button id="btn-back" class="icon-btn" hidden aria-label="Back">&#8592;</button>
+  <h1 id="title">Parcel Measure</h1>
+  <span id="badge" class="badge" hidden></span>
+</header>
+
+<main>
+
+  <!-- ============================ HOME ============================ -->
+  <section id="screen-home" class="screen active">
+    <div class="card" id="cal-status-card">
+      <h2>Calibration</h2>
+      <p id="cal-status" class="muted">Checking…</p>
+      <dl id="cal-summary" class="kv" hidden></dl>
+      <div class="row">
+        <button id="btn-go-calibrate" class="primary">Calibrate camera</button>
+        <button id="btn-export-cal" hidden>Export .json</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Measure</h2>
+      <p class="muted">
+        Point at the parcel. Each surface needs a printed QR sticker — its known
+        size is what turns pixels into millimetres.
+      </p>
+      <div class="row">
+        <button id="btn-go-measure" class="primary" disabled>Start measuring</button>
+      </div>
+      <p id="measure-blocked" class="hint">Calibrate first.</p>
+    </div>
+
+    <div class="card">
+      <h2>Printables</h2>
+      <p class="muted">Print at 100% / actual size, then check the ruler on the sheet.</p>
+      <ul id="printables-list" class="links"></ul>
+    </div>
+
+    <div class="card">
+      <h2>Diagnostics</h2>
+      <div class="row">
+        <button id="btn-go-diagnostics">Capabilities &amp; data</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================== CALIBRATE ========================== -->
+  <section id="screen-calibrate" class="screen">
+    <div class="viewport">
+      <video id="cal-video" playsinline muted autoplay></video>
+      <canvas id="cal-overlay"></canvas>
+      <div id="cal-toast" class="toast" hidden></div>
+    </div>
+
+    <div class="hud">
+      <div class="hud-row">
+        <span id="cal-count" class="pill">0 views</span>
+        <span id="cal-hint" class="pill muted">Show the whole board</span>
+      </div>
+      <p class="hint">
+        Capture 10–20 views: fill the frame, tilt the board both ways, and reach
+        into the corners. Cover the whole image, not just the middle.
+      </p>
+      <div class="hud-row">
+        <button id="btn-cal-capture" class="primary big">Capture</button>
+        <button id="btn-cal-solve" disabled>Solve</button>
+        <button id="btn-cal-reset">Reset</button>
+      </div>
+    </div>
+
+    <div id="cal-result" class="card" hidden>
+      <h2>Result</h2>
+      <dl id="cal-result-kv" class="kv"></dl>
+      <div id="cal-warnings" class="warn" hidden></div>
+      <div class="row">
+        <button id="btn-cal-save" class="primary">Save calibration</button>
+        <button id="btn-cal-discard">Discard</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================== MEASURE =========================== -->
+  <section id="screen-measure" class="screen">
+    <div class="viewport">
+      <video id="me-video" playsinline muted autoplay></video>
+      <canvas id="me-overlay"></canvas>
+      <canvas id="me-loupe" class="loupe" hidden></canvas>
+      <div id="me-toast" class="toast" hidden></div>
+    </div>
+
+    <div class="hud">
+      <div class="hud-row">
+        <span id="me-scale" class="pill">no scale</span>
+        <span id="me-precision" class="pill muted">—</span>
+      </div>
+      <div id="me-readout" class="readout">
+        <span class="readout-value">—</span>
+        <span class="readout-unit">mm</span>
+      </div>
+      <div id="me-segments" class="segments"></div>
+      <div class="hud-row">
+        <button id="btn-me-undo">Undo</button>
+        <button id="btn-me-clear">Clear</button>
+        <button id="btn-me-lock" class="primary">Freeze</button>
+      </div>
+      <p class="hint">
+        Tap two points on a surface to measure between them. Drag to fine-tune —
+        the loupe magnifies so you can land on an edge. Freeze to examine a still.
+      </p>
+    </div>
+  </section>
+
+  <!-- ========================= DIAGNOSTICS ========================= -->
+  <section id="screen-diagnostics" class="screen">
+    <div class="card">
+      <h2>Capability ladder</h2>
+      <p class="muted">Best available scale source first. The app uses the highest rung it can reach.</p>
+      <ol id="ladder" class="ladder"></ol>
+    </div>
+
+    <div class="card">
+      <h2>Device report</h2>
+      <dl id="caps-kv" class="kv"></dl>
+      <div class="row">
+        <button id="btn-probe">Re-probe camera</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Sticker sizes</h2>
+      <p class="muted">
+        Remembered sizes for codes whose payload does not carry one.
+      </p>
+      <ul id="qr-size-list" class="links"></ul>
+      <div class="row">
+        <input id="qr-size-id" placeholder="code id" size="8">
+        <input id="qr-size-mm" placeholder="mm" size="6" inputmode="decimal">
+        <button id="btn-add-qr-size">Add</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Import / export</h2>
+      <p class="muted">The file is the durable copy — a browser can evict its own storage.</p>
+      <div class="row">
+        <button id="btn-export-all">Export all</button>
+        <button id="btn-import">Import…</button>
+      </div>
+      <input id="file-import" type="file" accept="application/json,.json" hidden>
+      <p id="import-msg" class="hint"></p>
+    </div>
+
+    <div class="card danger">
+      <h2>Stored calibrations</h2>
+      <ul id="cal-list" class="links"></ul>
+      <div class="row">
+        <button id="btn-clear-all" class="danger-btn">Erase everything</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div id="global-error" class="error-bar" hidden></div>
+
+<script src="vendor/jsqr.js"></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
