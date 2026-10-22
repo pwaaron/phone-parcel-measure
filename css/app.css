@@ -301,6 +301,32 @@ input {
   color: var(--warn);
 }
 
+/* Inline "how big is this QR" prompt. Appears the moment an unknown code is
+ * seen, because the size has to be measured by hand — sticker printers are not
+ * calibrated, so it varies per batch. */
+.size-prompt {
+  background: rgba(245,166,35,.10);
+  border: 1px solid rgba(245,166,35,.45);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.size-prompt-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.size-prompt-label {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffd591;
+}
+.size-prompt input {
+  width: 84px;
+  text-align: center;
+}
+.size-prompt .hint { margin: 8px 0 0; font-size: 12px; }
+
 /* -------------------------------------------------------------------- HUD */
 
 .hud { display: flex; flex-direction: column; gap: 10px; }

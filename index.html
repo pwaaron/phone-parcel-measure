@@ -120,6 +120,22 @@
         <span id="me-scale" class="pill">no scale</span>
         <span id="me-precision" class="pill muted">—</span>
       </div>
+
+      <!-- Shown the moment a QR is decoded whose printed size is unknown.
+           Sticker printers are not calibrated, so the size genuinely varies
+           per batch and has to be measured once by hand. -->
+      <div id="me-size-prompt" class="size-prompt" hidden>
+        <div class="size-prompt-row">
+          <span class="size-prompt-label">QR found — how wide is it, in mm?</span>
+          <input id="me-size-input" inputmode="decimal" placeholder="mm" size="6">
+          <button id="me-size-set" class="primary">Set</button>
+        </div>
+        <p class="hint">
+          Measure the printed QR square once with a ruler. Every code this
+          printer produces inherits it until you change it.
+        </p>
+      </div>
+
       <div id="me-readout" class="readout">
         <span class="readout-value">—</span>
         <span class="readout-unit">mm</span>
@@ -134,10 +150,10 @@
         <button id="btn-me-lock">Freeze</button>
       </div>
       <p class="hint">
-        <strong>Auto-outline</strong> segments the face the QR sticker sits on and
-        measures it directly. If the outline is wrong, tap it to re-segment, or
-        fall back to tapping two points (or four corners for a full face).
-        Freeze to examine a still.
+        Measurements are taken <strong>on the plane of the QR code</strong> —
+        the shape of the object does not matter. Tap two points for a distance,
+        or three or more to outline a face. <strong>Auto-outline</strong>
+        segments the surface the code sits on.
       </p>
     </div>
   </section>

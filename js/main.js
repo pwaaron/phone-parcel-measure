@@ -727,6 +727,13 @@ async function measureTick() {
 function updateMeasureHud(usable) {
   const scalePill = $('me-scale');
   const precPill = $('me-precision');
+  const sizePrompt = $('me-size-prompt');
+
+  // A code was decoded but nothing tells us how big it is. Ask once, inline —
+  // sticker printers are not calibrated, so this genuinely varies per batch and
+  // cannot be a constant baked into the app.
+  const sizeless = state.qrDetections.find((q) => !q.sizeMm);
+  sizePrompt.hidden = !sizeless;
 
   if (state.surfaces.length) {
     const merged = state.surfaces.filter((s) => s.mergedCount > 1).length;
@@ -745,7 +752,7 @@ function updateMeasureHud(usable) {
   } else if (state.qrDetections.length) {
     scalePill.textContent = 'code seen, size unknown';
     scalePill.className = 'pill warn';
-    precPill.textContent = 'set its size in Diagnostics';
+    precPill.textContent = 'enter its size below';
   } else {
     scalePill.textContent = 'no scale';
     scalePill.className = 'pill';
@@ -1340,6 +1347,22 @@ function wire() {
   overlay.addEventListener('pointercancel', onPointerUp);
 
   $('btn-me-auto').addEventListener('click', runAutoOutline);
+
+  $('me-size-set').addEventListener('click', async () => {
+    const mm = Number($('me-size-input').value);
+    if (!Number.isFinite(mm) || mm <= 0) {
+      showError('Enter the printed QR width in millimetres.');
+      return;
+    }
+    // Stored as the default rather than against one payload: every code this
+    // printer produces shares the same size, and keying by payload would mean
+    // re-entering it for every tracking number.
+    await store.setMeta('defaultQrSizeMm', mm);
+    $('me-size-input').value = '';
+    $('me-size-prompt').hidden = true;
+    toast($('me-toast'), `QR size set to ${mm} mm`);
+    await measureTick();
+  });
   $('btn-me-undo').addEventListener('click', () => {
     state.points.pop();
     updateMeasurementReadout();
