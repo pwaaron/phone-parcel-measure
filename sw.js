@@ -14,7 +14,7 @@
 // Bump this on every deploy that changes a cached file. The strategy is
 // cache-first, so without a bump the phone keeps serving the previous version
 // and a fix appears not to have worked.
-const VERSION = 'v4';
+const VERSION = 'v5';
 const CACHE = `spx-parcel-measure-${VERSION}`;
 
 const SHELL = [
@@ -66,9 +66,14 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // Never cache the printables: they are large PDFs, and a stale board or
-  // sticker sheet is worse than a slow one.
+  // Never cache the printables or the model binaries. The printables are large
+  // PDFs where a stale copy is worse than a slow one, and the segmentation
+  // models are 47 MB — forcing those into the offline cache would be hostile on
+  // a phone. The browser's own HTTP cache handles them; they are only needed
+  // when the user asks for Auto-outline.
   if (url.pathname.includes('/printables/')) return;
+  if (url.pathname.includes('/models/')) return;
+  if (url.pathname.includes('/vendor/ort/')) return;
 
   event.respondWith(
     caches.match(req).then((cached) => {

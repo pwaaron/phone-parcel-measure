@@ -25,6 +25,7 @@ import {
 import { detectQrCodes, qrIsUsable, qrApparentSizePx } from './lib/qr.js';
 import { buildSurfaces, tapToPoint, segmentLengths, polylineLength, surfaceDistanceMm, closedLoopDimensions } from './lib/measure.js';
 import { snapToEdge } from './lib/subpix.js';
+import { Segmenter, frameToRGBA, maskOutline } from './lib/segment.js';
 import { probeCapabilities, chooseScaleSource, describeLadder } from './lib/capabilities.js';
 import { distance3D } from './lib/camera.js';
 import * as store from './lib/store.js';
@@ -44,11 +45,13 @@ const state = {
   surfaces: [],
   points: [],
   qrDetections: [],
+  outline: null,
   frozen: false,
   frozenFrame: null,
   lastFrame: null,
   dragging: null,
   procSize: { width: 0, height: 0 },
+  procK: null,
   displayRect: null,
   busy: false,
 };
@@ -630,6 +633,7 @@ async function enterMeasure() {
   }
   state.points = [];
   state.surfaces = [];
+  state.outline = null;
   state.frozen = false;
   state.frozenFrame = null;
   $('btn-me-lock').textContent = 'Freeze';
@@ -646,6 +650,28 @@ function startMeasureLoop() {
 
 function stopMeasureLoop() {
   if (measureTimer) { clearInterval(measureTimer); measureTimer = null; }
+}
+
+/**
+ * Rescale an intrinsic matrix to a different image size.
+ *
+ * Detection runs on a downscaled frame, but the calibration's K describes the
+ * full-resolution image. Feeding full-res K alongside downscaled image points
+ * tells the pose solver the camera has a far longer focal length than it does,
+ * and it compensates by pushing the object away — the distance comes out wrong
+ * by exactly the downscale factor, with no other symptom.
+ *
+ * Distortion coefficients are dimensionless (they act on normalised
+ * coordinates), so only the focal lengths and principal point need scaling.
+ */
+function scaleIntrinsics(K, fromSize, toSize) {
+  const sx = toSize.width / fromSize[0];
+  const sy = toSize.height / fromSize[1];
+  return [
+    [K[0][0] * sx, K[0][1] * sx, K[0][2] * sx],
+    [K[1][0] * sy, K[1][1] * sy, K[1][2] * sy],
+    [0, 0, 1],
+  ];
 }
 
 async function measureTick() {
@@ -674,7 +700,9 @@ async function measureTick() {
 
     if (usable.length && state.calibration) {
       const cal = state.calibration;
-      state.surfaces = buildSurfaces(usable, cal.K, cal.dist);
+      // Detection space, not capture space — see scaleIntrinsics above.
+      state.procK = scaleIntrinsics(cal.K, cal.imageSize, frame);
+      state.surfaces = buildSurfaces(usable, state.procK, cal.dist);
     } else {
       state.surfaces = [];
     }
@@ -762,6 +790,39 @@ function redrawMeasureOverlay() {
     ctx.moveTo(c0[0], c0[1]);
     ctx.lineTo(c1[0], c1[1]);
     ctx.stroke();
+  }
+
+  // Segmented outline from Auto-outline, drawn under the tapped points so a
+  // manual correction can sit on top of it.
+  if (state.outline && state.outline.pixels.length >= 3) {
+    ctx.beginPath();
+    state.outline.pixels.forEach((p, i) => {
+      const [x, y] = toC(p);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(62,207,142,.16)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(62,207,142,.95)';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    const dims = state.outline.dims;
+    ctx.font = '600 11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    for (let i = 0; i < state.outline.pixels.length; i++) {
+      const a = toC(state.outline.pixels[i]);
+      const b = toC(state.outline.pixels[(i + 1) % state.outline.pixels.length]);
+      const mx = (a[0] + b[0]) / 2;
+      const my = (a[1] + b[1]) / 2;
+      const label = `${dims.edges[i].toFixed(0)}`;
+      const wpx = ctx.measureText(label).width;
+      ctx.fillStyle = 'rgba(0,0,0,.72)';
+      ctx.fillRect(mx - wpx / 2 - 3, my - 8, wpx + 6, 15);
+      ctx.fillStyle = '#3ecf8e';
+      ctx.fillText(label, mx, my + 3);
+    }
+    ctx.textAlign = 'left';
   }
 
   // Measurement points and the outline through them. With three or more points
@@ -876,7 +937,7 @@ function commitPoint(pixel) {
     if (snap.snapped) { placed = snap.point; snapped = true; }
   }
 
-  const hit = tapToPoint(placed, state.surfaces, cal.K, cal.dist);
+  const hit = tapToPoint(placed, state.surfaces, state.procK || cal.K, cal.dist);
   if (!hit) {
     showError('That tap does not land on a known surface.');
     return;
@@ -926,6 +987,106 @@ function updateMeasurementReadout() {
   segEl.textContent = segs.length > 1
     ? segs.map((s, i) => `${i + 1}: ${s.toFixed(1)}`).join('   ') + `   total ${total.toFixed(1)} mm`
     : `${distance3D(pts3D[0], pts3D[1]).toFixed(1)} mm`;
+}
+
+/* ------------------------------------------------------------ auto-outline */
+
+let segmenter = null;
+
+function setAutoStatus(text) {
+  toast($('me-toast'), text, 4000);
+}
+
+/**
+ * Segment the face the QR sticker sits on, and measure it.
+ *
+ * The frame is frozen first. The mask comes back at the video's own resolution
+ * while everything else works in detection space, so the polygon is scaled into
+ * detection coordinates before it is projected onto the plane — mixing the two
+ * spaces here would produce a confidently wrong outline.
+ */
+async function runAutoOutline() {
+  if (!state.calibration) { showError('Calibrate first.'); return; }
+  if (!state.surfaces.length) {
+    showError('Point at a QR sticker first — it is what makes the measurement metric.');
+    return;
+  }
+
+  const btn = $('btn-me-auto');
+  btn.disabled = true;
+  const label = btn.textContent;
+
+  try {
+    // Freeze so the mask and the pose describe the same instant.
+    if (!state.frozen) {
+      state.frozen = true;
+      state.frozenFrame = grabGrey($('me-video'));
+      $('btn-me-lock').textContent = 'Live';
+    }
+
+    const video = $('me-video');
+    const { rgba, width, height } = frameToRGBA(video);
+
+    if (!segmenter) segmenter = new Segmenter();
+    await segmenter.load((stage, detail) => setAutoStatus(detail));
+
+    btn.textContent = 'Encoding…';
+    await segmenter.setImage(rgba, width, height);
+
+    // Prompt with the sticker whose plane we trust most: the one with the
+    // lowest reprojection error.
+    const surface = state.surfaces.reduce(
+      (a, b) => (a.rms <= b.rms ? a : b)
+    );
+    const qr = surface.qr;
+
+    btn.textContent = 'Segmenting…';
+    const result = await segmenter.promptFromQr(qr, width, height);
+
+    const outline = maskOutline(result.mask, result.width, result.height);
+    if (!outline) {
+      setAutoStatus('Could not find an object around the sticker — try moving closer');
+      return;
+    }
+
+    // Mask is in video pixels; everything downstream is in detection pixels.
+    const frame = state.frozenFrame;
+    const sx = frame.width / result.width;
+    const sy = frame.height / result.height;
+    const polyProc = outline.polygon.map((p) => [p[0] * sx, p[1] * sy]);
+
+    const cal = state.calibration;
+    const K = state.procK || cal.K;
+
+    const pts3D = [];
+    const keptPixels = [];
+    for (const p of polyProc) {
+      const hit = tapToPoint(p, state.surfaces, K, cal.dist);
+      if (hit) { pts3D.push(hit.point); keptPixels.push(p); }
+    }
+
+    if (pts3D.length < 3) {
+      setAutoStatus('The outline did not land on the measured surface');
+      return;
+    }
+
+    const dims = closedLoopDimensions(pts3D);
+    state.outline = { pixels: keptPixels, points3D: pts3D, dims, score: result.score };
+
+    const edgeList = dims.edges.map((e, i) => `${i + 1}: ${e.toFixed(1)}`).join('   ');
+    const valueEl = document.querySelector('#me-readout .readout-value');
+    valueEl.textContent = dims.perimeter.toFixed(0);
+    $('me-segments').textContent =
+      `${edgeList}\nperimeter ${dims.perimeter.toFixed(1)} mm   area ${(dims.area / 100).toFixed(1)} cm²   ` +
+      `(SAM ${(result.score * 100).toFixed(0)}%)`;
+
+    redrawMeasureOverlay();
+  } catch (e) {
+    showError(`Auto-outline failed: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
 }
 
 /* --------------------------------------------------------- loupe dragging */
@@ -1113,6 +1274,7 @@ function wire() {
   overlay.addEventListener('pointerup', onPointerUp);
   overlay.addEventListener('pointercancel', onPointerUp);
 
+  $('btn-me-auto').addEventListener('click', runAutoOutline);
   $('btn-me-undo').addEventListener('click', () => {
     state.points.pop();
     updateMeasurementReadout();
