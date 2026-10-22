@@ -253,15 +253,19 @@ function loadOrtRuntime() {
   });
 }
 
-/** Fetch the current frame as RGBA, for handing to the segmenter. */
-export function frameToRGBA(videoEl) {
-  const w = videoEl.videoWidth;
-  const h = videoEl.videoHeight;
+/**
+ * Fetch the current frame as RGBA, for handing to the segmenter.
+ * Accepts a video element or a canvas, so a frozen snapshot segments exactly
+ * the frame the user is looking at.
+ */
+export function frameToRGBA(source) {
+  const w = source.videoWidth || source.width;
+  const h = source.videoHeight || source.height;
   const c = frameToRGBA._c || (frameToRGBA._c = document.createElement('canvas'));
   c.width = w;
   c.height = h;
   const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(videoEl, 0, 0, w, h);
+  ctx.drawImage(source, 0, 0, w, h);
   return { rgba: ctx.getImageData(0, 0, w, h).data, width: w, height: h };
 }
 

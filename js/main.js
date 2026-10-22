@@ -187,10 +187,16 @@ function stopCamera() {
   }
 }
 
-/** Grab the current frame as a grey buffer, downscaled for processing. */
-function grabGrey(videoEl) {
-  const vw = videoEl.videoWidth;
-  const vh = videoEl.videoHeight;
+/**
+ * Grab a frame as a grey buffer, downscaled for processing.
+ *
+ * Accepts a video element or a canvas — the frozen snapshot is a canvas, and
+ * both need to go through the identical path so detection behaves the same
+ * whether the scene is live or frozen.
+ */
+function grabGrey(source) {
+  const vw = source.videoWidth || source.width;
+  const vh = source.videoHeight || source.height;
   if (!vw || !vh) return null;
 
   const scale = Math.min(1, MAX_PROC_WIDTH / vw);
@@ -201,7 +207,7 @@ function grabGrey(videoEl) {
   c.width = w;
   c.height = h;
   const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(videoEl, 0, 0, w, h);
+  ctx.drawImage(source, 0, 0, w, h);
 
   const img = ctx.getImageData(0, 0, w, h);
   const grey = new Uint8ClampedArray(w * h);
@@ -636,7 +642,9 @@ async function enterMeasure() {
   state.outline = null;
   state.frozen = false;
   state.frozenFrame = null;
+  $('me-snapshot').hidden = true;
   $('btn-me-lock').textContent = 'Freeze';
+  $('btn-me-lock').classList.add('primary');
   startMeasureLoop();
 }
 
@@ -1018,13 +1026,9 @@ async function runAutoOutline() {
 
   try {
     // Freeze so the mask and the pose describe the same instant.
-    if (!state.frozen) {
-      state.frozen = true;
-      state.frozenFrame = grabGrey($('me-video'));
-      $('btn-me-lock').textContent = 'Live';
-    }
+    if (!state.frozen) setFrozen(true);
 
-    const video = $('me-video');
+    const video = activeFrameSource();
     const { rgba, width, height } = frameToRGBA(video);
 
     if (!segmenter) segmenter = new Segmenter();
@@ -1089,6 +1093,67 @@ async function runAutoOutline() {
   }
 }
 
+/* ---------------------------------------------------------------- freeze */
+
+/**
+ * Capture the current video frame into the snapshot canvas.
+ *
+ * Drawing at the video's own resolution keeps the snapshot a 1:1 copy of what
+ * the detectors see, so a tap on the frozen image maps to the same pixel the
+ * maths uses.
+ */
+function captureSnapshot() {
+  const video = $('me-video');
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh) return false;
+
+  const canvas = $('me-snapshot');
+  canvas.width = vw;
+  canvas.height = vh;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, vw, vh);
+  return true;
+}
+
+/**
+ * The element every consumer should read pixels from.
+ *
+ * When frozen this is the snapshot, not the live video. Getting this wrong was
+ * a real bug: the display kept playing while measurements were pinned to a
+ * captured frame, so the loupe magnified a moving image and Auto-outline
+ * segmented a third, different moment. One source, chosen here, everywhere.
+ */
+function activeFrameSource() {
+  return state.frozen ? $('me-snapshot') : $('me-video');
+}
+
+function setFrozen(frozen) {
+  const video = $('me-video');
+  const snap = $('me-snapshot');
+
+  if (frozen) {
+    if (!captureSnapshot()) { showError('No frame to freeze yet.'); return; }
+    state.frozen = true;
+    state.frozenFrame = grabGrey(snap);
+    state.lastFrame = state.frozenFrame;
+    snap.hidden = false;
+    // Pause rather than stop: the stream stays open so resuming is instant,
+    // but a paused element stops repainting and stops burning battery.
+    video.pause();
+    $('btn-me-lock').textContent = 'Live';
+    $('btn-me-lock').classList.remove('primary');
+    toast($('me-toast'), 'Frozen — measurements are pinned to this frame');
+  } else {
+    state.frozen = false;
+    state.frozenFrame = null;
+    snap.hidden = true;
+    video.play().catch(() => {});
+    $('btn-me-lock').textContent = 'Freeze';
+    $('btn-me-lock').classList.add('primary');
+  }
+}
+
 /* --------------------------------------------------------- loupe dragging */
 
 function showLoupe(frame, pixel, canvas, loupe) {
@@ -1112,17 +1177,18 @@ function showLoupe(frame, pixel, canvas, loupe) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, size, size);
 
-  // Draw from the video element directly so the loupe shows full-resolution
-  // detail rather than the downscaled processing copy.
-  const video = $('me-video');
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  const sx = (pixel[0] / frame.width) * vw;
-  const sy = (pixel[1] / frame.height) * vh;
-  const sw = (2 * half / frame.width) * vw;
-  const sh = (2 * half / frame.height) * vh;
+  // Draw from the frozen still when there is one, so the magnifier shows the
+  // same pixels the measurement is taken from rather than a live frame that has
+  // since moved.
+  const source = activeFrameSource();
+  const sw0 = source.videoWidth || source.width;
+  const sh0 = source.videoHeight || source.height;
+  const sx = (pixel[0] / frame.width) * sw0;
+  const sy = (pixel[1] / frame.height) * sh0;
+  const sw = (2 * half / frame.width) * sw0;
+  const sh = (2 * half / frame.height) * sh0;
 
-  ctx.drawImage(video, sx - sw / 2, sy - sh / 2, sw, sh, 0, 0, size, size);
+  ctx.drawImage(source, sx - sw / 2, sy - sh / 2, sw, sh, 0, 0, size, size);
 
   // Crosshair
   ctx.strokeStyle = 'rgba(238,77,45,.95)';
@@ -1138,10 +1204,9 @@ function showLoupe(frame, pixel, canvas, loupe) {
 
 function onPointerDown(ev) {
   if (state.activeScreen !== 'measure') return;
-  const video = $('me-video');
-  const frame = state.frozen && state.frozenFrame ? state.frozenFrame : grabGrey(video);
+  const frame = state.frozen && state.frozenFrame ? state.frozenFrame : grabGrey(activeFrameSource());
   if (!frame) return;
-  const pixel = pointerToImage(ev.clientX, ev.clientY, video, frame.width, frame.height);
+  const pixel = pointerToImage(ev.clientX, ev.clientY, $('me-video'), frame.width, frame.height);
   state.dragging = { pixel, frame };
   showLoupe(frame, pixel, $('me-overlay'), $('me-loupe'));
   ev.preventDefault();
@@ -1285,17 +1350,7 @@ function wire() {
     updateMeasurementReadout();
     redrawMeasureOverlay();
   });
-  $('btn-me-lock').addEventListener('click', () => {
-    state.frozen = !state.frozen;
-    if (state.frozen) {
-      state.frozenFrame = grabGrey($('me-video'));
-      $('btn-me-lock').textContent = 'Live';
-      toast($('me-toast'), 'Frozen — points stay put');
-    } else {
-      state.frozenFrame = null;
-      $('btn-me-lock').textContent = 'Freeze';
-    }
-  });
+  $('btn-me-lock').addEventListener('click', () => setFrozen(!state.frozen));
 
   $('btn-probe').addEventListener('click', async () => {
     state.caps = await probeCapabilities();

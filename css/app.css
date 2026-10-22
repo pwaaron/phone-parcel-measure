@@ -222,6 +222,14 @@ input {
 
 .viewport video { object-fit: contain; }
 
+/* The frozen still. Sits over the video and mirrors its object-fit so the
+ * snapshot lines up pixel-for-pixel with what the user was just looking at. */
+#me-snapshot {
+  object-fit: contain;
+  background: #000;
+  z-index: 1;
+}
+
 .loupe {
   position: absolute;
   width: 132px;
