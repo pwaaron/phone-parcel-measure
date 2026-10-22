@@ -266,6 +266,41 @@ export function polygonArea3D(points) {
   return Math.hypot(n[0], n[1], n[2]) / 2;
 }
 
+/**
+ * Dimensions of a closed loop of points: every edge, the perimeter, the area,
+ * and — for a quadrilateral — how rectangular it is.
+ *
+ * This is what turns "tap the four corners of the parcel face" into an actual
+ * dimension readout. It cannot know which edge is the parcel's length and which
+ * is its width, so it reports all four and the area, and lets the user read off
+ * what they need. Forcing a length/width assignment would be guessing.
+ *
+ * `rectangularity` is the ratio of opposite edge pairs: 1.0 means a true
+ * rectangle, and a low value means the taps did not land on a rectangular face
+ * (a mis-tap, or a genuinely tapered object). Worth surfacing, because a
+ * mis-tapped corner otherwise looks exactly like a real measurement.
+ */
+export function closedLoopDimensions(points3D) {
+  const n = points3D.length;
+  if (n < 3) return null;
+
+  const edges = [];
+  for (let i = 0; i < n; i++) {
+    edges.push(distance3D(points3D[i], points3D[(i + 1) % n]));
+  }
+  const perimeter = edges.reduce((a, b) => a + b, 0);
+  const area = polygonArea3D(points3D);
+
+  let rectangularity = null;
+  if (n === 4) {
+    const pairA = Math.min(edges[0], edges[2]) / Math.max(edges[0], edges[2], 1e-9);
+    const pairB = Math.min(edges[1], edges[3]) / Math.max(edges[1], edges[3], 1e-9);
+    rectangularity = Math.min(pairA, pairB);
+  }
+
+  return { edges, perimeter, area, rectangularity, pointCount: n };
+}
+
 /** Best-fit plane through 3D points, for reporting orientation. */
 export function fitPlane(points) {
   if (points.length < 3) return null;

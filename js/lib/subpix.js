@@ -103,3 +103,70 @@ export function refineChessboardCorner(gray, width, height, corner, squarePx) {
   const win = Math.max(2, Math.min(7, Math.round(squarePx * 0.35)));
   return cornerSubPix(gray, width, height, corner, win, 25, 0.005);
 }
+
+/**
+ * Snap a hand-placed point onto the nearest strong image edge.
+ *
+ * A fingertip lands within a few millimetres at best, which at close range is
+ * several pixels of error — and on a parcel that error is the measurement. The
+ * object's own silhouette is a far better guide than the finger, so we look for
+ * the strongest gradient within a small radius and pull the point onto it.
+ *
+ * Two guards matter:
+ *   - the candidate must be clearly stronger than the typical gradient nearby,
+ *     or flat surfaces would snap onto noise;
+ *   - the shift is capped, so a tap on a blank area stays where it was put
+ *     rather than jumping to some distant feature.
+ *
+ * Returns { point, snapped, strength }.
+ */
+export function snapToEdge(gray, width, height, point, radius = 9, opts = {}) {
+  const { minStrengthRatio = 2.2, maxShift = null } = opts;
+  const cap = maxShift === null ? radius : maxShift;
+
+  const x0 = Math.max(1, Math.floor(point[0] - radius));
+  const x1 = Math.min(width - 2, Math.ceil(point[0] + radius));
+  const y0 = Math.max(1, Math.floor(point[1] - radius));
+  const y1 = Math.min(height - 2, Math.ceil(point[1] + radius));
+
+  if (x1 <= x0 || y1 <= y0) return { point, snapped: false, strength: 0 };
+
+  const magAt = (x, y) => {
+    const i = y * width + x;
+    const gx = gray[i + 1] - gray[i - 1];
+    const gy = gray[i + width] - gray[i - width];
+    return Math.hypot(gx, gy);
+  };
+
+  // Median-ish background level, so "strong" is judged against this patch
+  // rather than an absolute number that varies with lighting and exposure.
+  const samples = [];
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) samples.push(magAt(x, y));
+  samples.sort((a, b) => a - b);
+  const median = samples[Math.floor(samples.length / 2)] || 0;
+
+  let best = null;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const m = magAt(x, y);
+      if (m <= median * minStrengthRatio) continue;
+      const d = Math.hypot(x - point[0], y - point[1]);
+      if (d > cap) continue;
+      // Prefer strong edges, but not so strongly that a slightly stronger edge
+      // far away beats a good one right under the finger.
+      const score = m / (1 + d * 1.5);
+      if (!best || score > best.score) best = { x, y, m, score, d };
+    }
+  }
+
+  if (!best) return { point, snapped: false, strength: median };
+
+  // Refine along the gradient so the snap is sub-pixel, not merely the nearest
+  // whole pixel.
+  const refined = cornerSubPix(gray, width, height, [best.x, best.y], 2, 10, 0.05);
+  const shifted = Math.hypot(refined[0] - point[0], refined[1] - point[1]);
+  if (!Number.isFinite(shifted) || shifted > cap) {
+    return { point: [best.x, best.y], snapped: true, strength: best.m };
+  }
+  return { point: refined, snapped: true, strength: best.m };
+}

@@ -14,7 +14,7 @@
 // Bump this on every deploy that changes a cached file. The strategy is
 // cache-first, so without a bump the phone keeps serving the previous version
 // and a fix appears not to have worked.
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CACHE = `spx-parcel-measure-${VERSION}`;
 
 const SHELL = [

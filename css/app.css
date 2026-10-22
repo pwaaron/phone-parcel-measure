@@ -332,6 +332,9 @@ input {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   min-height: 18px;
+  /* The face readout puts the edge list and the area on separate lines. */
+  white-space: pre-line;
+  line-height: 1.5;
 }
 
 @media (min-width: 700px) {

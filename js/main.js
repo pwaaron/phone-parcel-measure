@@ -23,7 +23,8 @@ import {
   coverageFraction, suggestNextRegion, noveltyScore, assessFrame,
 } from './lib/capture.js';
 import { detectQrCodes, qrIsUsable, qrApparentSizePx } from './lib/qr.js';
-import { buildSurfaces, tapToPoint, segmentLengths, polylineLength, surfaceDistanceMm } from './lib/measure.js';
+import { buildSurfaces, tapToPoint, segmentLengths, polylineLength, surfaceDistanceMm, closedLoopDimensions } from './lib/measure.js';
+import { snapToEdge } from './lib/subpix.js';
 import { probeCapabilities, chooseScaleSource, describeLadder } from './lib/capabilities.js';
 import { distance3D } from './lib/camera.js';
 import * as store from './lib/store.js';
@@ -45,6 +46,7 @@ const state = {
   qrDetections: [],
   frozen: false,
   frozenFrame: null,
+  lastFrame: null,
   dragging: null,
   procSize: { width: 0, height: 0 },
   displayRect: null,
@@ -656,6 +658,9 @@ async function measureTick() {
       : grabGrey(video);
     if (!frame) return;
     if (state.frozen && !state.frozenFrame) state.frozenFrame = frame;
+    // Keep the latest frame so a tap can snap to the object's edges without
+    // grabbing a fresh one mid-gesture.
+    state.lastFrame = frame;
 
     const sizeMap = await store.getQrSizeMap();
     const defaultSizeMm = Number(await store.getMeta('defaultQrSizeMm', 0)) || null;
@@ -759,16 +764,50 @@ function redrawMeasureOverlay() {
     ctx.stroke();
   }
 
-  // Measurement points and the polyline through them.
+  // Measurement points and the outline through them. With three or more points
+  // the loop is closed and shaded, so it reads as a face rather than a path.
   if (state.points.length) {
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2.5;
+    const closed = state.points.length >= 3;
+
     ctx.beginPath();
     state.points.forEach((p, i) => {
       const [x, y] = toC(p.pixel);
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     });
+    if (closed) {
+      const [x, y] = toC(state.points[0].pixel);
+      ctx.lineTo(x, y);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(238,77,45,.18)';
+      ctx.fill();
+    }
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2.5;
     ctx.stroke();
+
+    // Edge lengths, drawn at each edge midpoint so the outline carries its own
+    // dimensions without needing the readout panel.
+    if (closed) {
+      const pts3D = state.points.filter((p) => p.point3D).map((p) => p.point3D);
+      if (pts3D.length === state.points.length && pts3D.length >= 3) {
+        const dims = closedLoopDimensions(pts3D);
+        ctx.font = '600 11px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        for (let i = 0; i < state.points.length; i++) {
+          const a = toC(state.points[i].pixel);
+          const b = toC(state.points[(i + 1) % state.points.length].pixel);
+          const mx = (a[0] + b[0]) / 2;
+          const my = (a[1] + b[1]) / 2;
+          const label = `${dims.edges[i].toFixed(0)}`;
+          const wpx = ctx.measureText(label).width;
+          ctx.fillStyle = 'rgba(0,0,0,.7)';
+          ctx.fillRect(mx - wpx / 2 - 3, my - 8, wpx + 6, 15);
+          ctx.fillStyle = '#fff';
+          ctx.fillText(label, mx, my + 3);
+        }
+        ctx.textAlign = 'left';
+      }
+    }
 
     state.points.forEach((p, i) => {
       const [x, y] = toC(p.pixel);
@@ -779,6 +818,15 @@ function redrawMeasureOverlay() {
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 2;
       ctx.stroke();
+      // A ring marks a point that was pulled onto an edge, so the user can tell
+      // at a glance which placements the app adjusted.
+      if (p.snapped) {
+        ctx.beginPath();
+        ctx.arc(x, y, 12, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(62,207,142,.95)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
       ctx.fillStyle = '#fff';
       ctx.font = '700 12px system-ui, sans-serif';
       ctx.fillText(String(i + 1), x + 11, y + 4);
@@ -817,7 +865,18 @@ function commitPoint(pixel) {
     return;
   }
   const cal = state.calibration;
-  const hit = tapToPoint(pixel, state.surfaces, cal.K, cal.dist);
+
+  // Pull the tap onto the object's own edge before measuring. A fingertip lands
+  // several pixels out, and on a parcel that error IS the measurement.
+  let placed = pixel;
+  let snapped = false;
+  const frame = state.frozen && state.frozenFrame ? state.frozenFrame : state.lastFrame;
+  if (frame) {
+    const snap = snapToEdge(frame.data, frame.width, frame.height, pixel, 9);
+    if (snap.snapped) { placed = snap.point; snapped = true; }
+  }
+
+  const hit = tapToPoint(placed, state.surfaces, cal.K, cal.dist);
   if (!hit) {
     showError('That tap does not land on a known surface.');
     return;
@@ -825,7 +884,7 @@ function commitPoint(pixel) {
   if (!hit.onPlane) {
     toast($('me-toast'), 'Far from the sticker — result may be unreliable');
   }
-  state.points.push({ pixel, point3D: hit.point, surface: hit.surface });
+  state.points.push({ pixel: placed, point3D: hit.point, surface: hit.surface, snapped });
   updateMeasurementReadout();
   redrawMeasureOverlay();
 }
@@ -836,15 +895,33 @@ function updateMeasurementReadout() {
   const segEl = $('me-segments');
 
   if (pts.length < 2) {
-    valueEl.textContent = pts.length === 1 ? '—' : '—';
-    segEl.textContent = pts.length === 1 ? 'Tap a second point' : '';
+    valueEl.textContent = '—';
+    segEl.textContent = pts.length === 1
+      ? 'Tap a second point — or three more to outline a face'
+      : 'Tap two points to measure, or four corners to outline a face';
     return;
   }
 
   const pts3D = pts.map((p) => p.point3D);
+
+  // Three or more points on one surface reads as an attempt to outline a face,
+  // so report the shape rather than just the last segment.
+  if (pts.length >= 3) {
+    const dims = closedLoopDimensions(pts3D);
+    if (dims) {
+      valueEl.textContent = dims.perimeter.toFixed(0);
+      const parts = dims.edges.map((e, i) => `${i + 1}: ${e.toFixed(1)}`).join('   ');
+      let note = `perimeter ${dims.perimeter.toFixed(1)} mm   area ${(dims.area / 100).toFixed(1)} cm²`;
+      if (dims.rectangularity !== null && dims.rectangularity < 0.9) {
+        note += `   ⚠ opposite edges differ by ${Math.round((1 - dims.rectangularity) * 100)}% — re-check the corners`;
+      }
+      segEl.textContent = `${parts}\n${note}`;
+      return;
+    }
+  }
+
   const segs = segmentLengths(pts3D);
   const total = polylineLength(pts3D);
-
   valueEl.textContent = total.toFixed(1);
   segEl.textContent = segs.length > 1
     ? segs.map((s, i) => `${i + 1}: ${s.toFixed(1)}`).join('   ') + `   total ${total.toFixed(1)} mm`
@@ -854,8 +931,19 @@ function updateMeasurementReadout() {
 /* --------------------------------------------------------- loupe dragging */
 
 function showLoupe(frame, pixel, canvas, loupe) {
+  // The canvas has a CSS size but its backing store defaults to 300x150, so
+  // drawing at "size" without setting width/height squashes the magnification
+  // into a 132 px box and makes the loupe useless for aiming.
+  const rect = loupe.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const cssSize = Math.round(rect.width) || 132;
+  if (loupe.width !== Math.round(cssSize * dpr)) {
+    loupe.width = Math.round(cssSize * dpr);
+    loupe.height = Math.round(cssSize * dpr);
+  }
+
+  const size = loupe.width;
   const zoom = 6;
-  const size = loupe.width || 132;
   const ctx = loupe.getContext('2d');
   const half = size / (2 * zoom);
 
@@ -877,7 +965,7 @@ function showLoupe(frame, pixel, canvas, loupe) {
 
   // Crosshair
   ctx.strokeStyle = 'rgba(238,77,45,.95)';
-  ctx.lineWidth = 1;
+  ctx.lineWidth = Math.max(1, dpr);
   ctx.beginPath();
   ctx.moveTo(size / 2, 0); ctx.lineTo(size / 2, size);
   ctx.moveTo(0, size / 2); ctx.lineTo(size, size / 2);
