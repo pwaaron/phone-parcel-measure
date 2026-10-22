@@ -64,23 +64,34 @@
     <div class="viewport">
       <video id="cal-video" playsinline muted autoplay></video>
       <canvas id="cal-overlay"></canvas>
+      <div id="cal-coverage" class="coverage" aria-hidden="true"></div>
       <div id="cal-toast" class="toast" hidden></div>
     </div>
 
     <div class="hud">
+      <div id="cal-guidance" class="guidance">Starting camera…</div>
+
       <div class="hud-row">
         <span id="cal-count" class="pill">0 views</span>
-        <span id="cal-hint" class="pill muted">Show the whole board</span>
+        <span id="cal-sharp" class="pill muted">—</span>
+        <span id="cal-cov" class="pill muted">coverage 0%</span>
       </div>
-      <p class="hint">
-        Capture 10–20 views: fill the frame, tilt the board both ways, and reach
-        into the corners. Cover the whole image, not just the middle.
-      </p>
+
       <div class="hud-row">
-        <button id="btn-cal-capture" class="primary big">Capture</button>
+        <button id="btn-cal-auto" class="primary big">Auto-capture: ON</button>
+      </div>
+      <div class="hud-row">
+        <button id="btn-cal-capture">Capture now</button>
         <button id="btn-cal-solve" disabled>Solve</button>
         <button id="btn-cal-reset">Reset</button>
       </div>
+
+      <p class="hint">
+        Sweep the board around the frame — the shaded grid shows where it has
+        been. Fill the corners: those views are what pin down the principal
+        point and lens distortion, and without them the calibration converges
+        with a low error and still measures badly.
+      </p>
     </div>
 
     <div id="cal-result" class="card" hidden>
@@ -144,11 +155,22 @@
     <div class="card">
       <h2>Sticker sizes</h2>
       <p class="muted">
-        Remembered sizes for codes whose payload does not carry one.
+        Any QR code works as a ruler — it only needs its printed size. Codes made
+        by this project carry their size in the payload. For any other QR, set the
+        default below and every such code inherits it.
       </p>
+      <div class="row">
+        <label for="qr-default-mm" class="muted" style="flex:1">Default size for plain QR codes</label>
+        <input id="qr-default-mm" placeholder="mm" size="6" inputmode="decimal">
+        <button id="btn-set-qr-default">Set</button>
+      </div>
+      <p id="qr-default-status" class="hint"></p>
+
+      <h3 style="font-size:14px;margin:14px 0 6px">Per-code overrides</h3>
+      <p class="muted">Sizes remembered against one specific code.</p>
       <ul id="qr-size-list" class="links"></ul>
       <div class="row">
-        <input id="qr-size-id" placeholder="code id" size="8">
+        <input id="qr-size-id" placeholder="code id or text" size="14">
         <input id="qr-size-mm" placeholder="mm" size="6" inputmode="decimal">
         <button id="btn-add-qr-size">Add</button>
       </div>

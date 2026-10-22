@@ -18,6 +18,10 @@ import {
   makeBoardModel, detectCharucoCorners, charucoViewToCalibration, isViewUsable,
 } from './lib/charuco.js';
 import { calibrateCamera, horizontalFovDeg } from './lib/calibrate.js';
+import {
+  laplacianVariance, makeSharpnessGate, makeCoverageTracker, recordView,
+  coverageFraction, suggestNextRegion, noveltyScore, assessFrame,
+} from './lib/capture.js';
 import { detectQrCodes, qrIsUsable, qrApparentSizePx } from './lib/qr.js';
 import { buildSurfaces, tapToPoint, segmentLengths, polylineLength, surfaceDistanceMm } from './lib/measure.js';
 import { probeCapabilities, chooseScaleSource, describeLadder } from './lib/capabilities.js';
@@ -269,6 +273,7 @@ async function go(name) {
   }[name] || 'Parcel Measure';
 
   if (name !== 'calibrate' && name !== 'measure') stopCamera();
+  if (name !== 'calibrate') stopCalLoop();
 
   if (name === 'calibrate') await enterCalibrate();
   if (name === 'measure') await enterMeasure();
@@ -346,6 +351,75 @@ async function renderPrintables() {
 
 /* -------------------------------------------------------------- calibrate */
 
+const CAL_GRID = 4;
+const CAL_TARGET_VIEWS = 16;
+
+let calTimer = null;
+const calState = {
+  tracker: null,
+  sharpness: makeSharpnessGate(),
+  autoCapture: true,
+  lastGuidance: '',
+  busy: false,
+  cooldownUntil: 0,
+};
+
+async function ensureBoardModel() {
+  if (state.boardModel) return;
+  try {
+    const res = await fetch('printables/charuco_A4_8x6_23.5mm.board.json');
+    const spec = await res.json();
+    state.boardModel = makeBoardModel(spec);
+    state.boardSpec = spec;
+  } catch {
+    state.boardModel = makeBoardModel({
+      squaresX: 8, squaresY: 6, squareLengthMm: 23.5, markerLengthMm: 11.75,
+    });
+    state.boardSpec = { dictionary: 'DICT_4X4_50' };
+  }
+}
+
+function buildCoverageGrid(n) {
+  const el = $('cal-coverage');
+  el.style.gridTemplateColumns = `repeat(${n}, 1fr)`;
+  el.style.gridTemplateRows = `repeat(${n}, 1fr)`;
+  el.innerHTML = '';
+  for (let i = 0; i < n * n; i++) {
+    const d = document.createElement('div');
+    d.className = 'cell';
+    el.appendChild(d);
+  }
+}
+
+function renderCoverage() {
+  const t = calState.tracker;
+  if (!t) return;
+  const cells = $('cal-coverage').children;
+  const next = suggestNextRegion(t);
+
+  for (let i = 0; i < cells.length; i++) {
+    const gy = Math.floor(i / t.gridN);
+    const gx = i % t.gridN;
+    cells[i].classList.toggle('hit', t.cells[i] > 0);
+    cells[i].classList.toggle('next', !!next && next.gx === gx && next.gy === gy);
+  }
+  $('cal-cov').textContent = `coverage ${Math.round(coverageFraction(t) * 100)}%`;
+}
+
+function setGuidance(text, kind = '') {
+  if (text === calState.lastGuidance) return;
+  calState.lastGuidance = text;
+  const el = $('cal-guidance');
+  el.textContent = text;
+  el.className = `guidance ${kind}`;
+}
+
+function updateCalUi() {
+  const n = state.calViews.length;
+  $('cal-count').textContent = `${n} view${n === 1 ? '' : 's'}`;
+  $('btn-cal-solve').disabled = n < 6;
+}
+
 async function enterCalibrate() {
   try {
     await startCamera($('cal-video'));
@@ -353,30 +427,107 @@ async function enterCalibrate() {
     showError(explainCameraError(e));
     return;
   }
-  if (!state.boardModel) {
-    // The board spec written by the generator; if absent, fall back to the
-    // default the tool produces.
-    try {
-      const res = await fetch('printables/charuco_A4_8x6_23.5mm.board.json');
-      const spec = await res.json();
-      state.boardModel = makeBoardModel(spec);
-      state.boardSpec = spec;
-    } catch {
-      state.boardModel = makeBoardModel({
-        squaresX: 8, squaresY: 6, squareLengthMm: 23.5, markerLengthMm: 11.75,
-      });
-      state.boardSpec = { dictionary: 'DICT_4X4_50' };
+  await ensureBoardModel();
+  calState.tracker = null; // created on the first frame, once the size is known
+  calState.lastGuidance = '';
+  buildCoverageGrid(CAL_GRID);
+  updateCalUi();
+  startCalLoop();
+}
+
+function startCalLoop() {
+  stopCalLoop();
+  // ~4 fps: fast enough to feel live, slow enough to leave the phone's CPU for
+  // the detection itself, which is the expensive part.
+  calTimer = setInterval(calTick, 240);
+  calTick();
+}
+
+function stopCalLoop() {
+  if (calTimer) { clearInterval(calTimer); calTimer = null; }
+}
+
+async function calTick() {
+  if (state.activeScreen !== 'calibrate' || calState.busy) return;
+  calState.busy = true;
+
+  try {
+    const frame = grabGrey($('cal-video'));
+    if (!frame) return;
+
+    if (!calState.tracker) {
+      calState.tracker = makeCoverageTracker([frame.width, frame.height], CAL_GRID);
     }
+
+    const dict = ARUCO_DICTS[state.boardSpec?.dictionary || 'DICT_4X4_50'];
+    if (!dict) { showError(`Dictionary ${state.boardSpec?.dictionary} is not bundled.`); return; }
+
+    const sharp = calState.sharpness.test(
+      laplacianVariance(frame.data, frame.width, frame.height)
+    );
+    $('cal-sharp').textContent = `sharp ${Math.round(sharp.value)}`;
+
+    const markers = detectMarkers(frame.data, frame.width, frame.height, dict);
+    if (markers.length < 4) {
+      setGuidance('Show the whole board', '');
+      return;
+    }
+
+    const corners = detectCharucoCorners(frame.data, frame.width, frame.height, markers, state.boardModel);
+    const usable = corners.filter((c) => c.imagePoint).map((c) => c.imagePoint);
+
+    if (!isViewUsable(corners, state.boardModel)) {
+      setGuidance(`${usable.length} corners — get the whole board in frame, or hold it flatter`, 'warn');
+      return;
+    }
+
+    const novelty = noveltyScore(calState.tracker, usable);
+    const verdict = assessFrame({
+      cornerCount: usable.length,
+      sharpness: sharp,
+      novelty,
+    });
+
+    const enough = state.calViews.length >= CAL_TARGET_VIEWS;
+
+    if (verdict.accept && !enough && calState.autoCapture && Date.now() > calState.cooldownUntil) {
+      commitCalView(corners, usable);
+      setGuidance(`Captured — ${state.calViews.length}/${CAL_TARGET_VIEWS}`, 'ok');
+      calState.cooldownUntil = Date.now() + 700;
+      return;
+    }
+
+    if (enough) {
+      setGuidance('Enough views — press Solve', 'ok');
+      return;
+    }
+
+    if (!verdict.accept) {
+      setGuidance(verdict.guidance, 'warn');
+      return;
+    }
+
+    const next = suggestNextRegion(calState.tracker);
+    setGuidance(
+      next ? `${next.instruction}${calState.autoCapture ? '' : ' — then tap Capture'}` : 'Good — keep sweeping',
+      'ok'
+    );
+  } catch (e) {
+    setGuidance(`Detection error: ${e.message}`, 'warn');
+  } finally {
+    calState.busy = false;
   }
+}
+
+function commitCalView(corners, usablePixels) {
+  state.calViews.push(charucoViewToCalibration(corners, state.boardModel));
+  recordView(calState.tracker, usablePixels);
+  renderCoverage();
   updateCalUi();
 }
 
-function updateCalUi() {
-  $('cal-count').textContent = `${state.calViews.length} view${state.calViews.length === 1 ? '' : 's'}`;
-  $('btn-cal-solve').disabled = state.calViews.length < 6;
-}
-
-async function captureCalibrationView() {
+/** Manual capture: bypasses the novelty and sharpness gates on purpose. */
+function captureCalibrationView() {
   const video = $('cal-video');
   const frame = grabGrey(video);
   if (!frame) { toast($('cal-toast'), 'No frame yet'); return; }
@@ -389,15 +540,16 @@ async function captureCalibrationView() {
     toast($('cal-toast'), `Only ${markers.length} markers — get the whole board in frame`);
     return;
   }
-
   const corners = detectCharucoCorners(frame.data, frame.width, frame.height, markers, state.boardModel);
   if (!isViewUsable(corners, state.boardModel)) {
     toast($('cal-toast'), `Only ${corners.length} corners — too few or too edge-on`);
     return;
   }
-
-  state.calViews.push(charucoViewToCalibration(corners, state.boardModel));
-  updateCalUi();
+  if (!calState.tracker) {
+    calState.tracker = makeCoverageTracker([frame.width, frame.height], CAL_GRID);
+  }
+  const usable = corners.filter((c) => c.imagePoint).map((c) => c.imagePoint);
+  commitCalView(corners, usable);
   toast($('cal-toast'), `Captured ${corners.length} corners`);
 }
 
@@ -506,9 +658,10 @@ async function measureTick() {
     if (state.frozen && !state.frozenFrame) state.frozenFrame = frame;
 
     const sizeMap = await store.getQrSizeMap();
+    const defaultSizeMm = Number(await store.getMeta('defaultQrSizeMm', 0)) || null;
     const qrs = await detectQrCodes(frame.data, frame.width, frame.height, {
       sizeRegistry: sizeMap,
-      expectedSizeMm: Number(await store.getMeta('defaultQrSizeMm', 0)) || null,
+      defaultSizeMm,
     });
 
     state.qrDetections = qrs;
@@ -808,6 +961,12 @@ async function renderDiagnostics() {
     ? [...sizes].map(([id, mm]) => `<li><span>${id}</span><span>${mm} mm</span></li>`).join('')
     : '<li class="muted">None recorded.</li>';
 
+  const defaultMm = Number(await store.getMeta('defaultQrSizeMm', 0)) || 0;
+  $('qr-default-mm').value = defaultMm || '';
+  $('qr-default-status').textContent = defaultMm
+    ? `Any QR without its own size is treated as ${defaultMm} mm.`
+    : 'No default set — a plain QR code cannot be used as a ruler yet.';
+
   const calList = $('cal-list');
   const cals = await store.listCalibrations();
   calList.innerHTML = cals.length
@@ -836,12 +995,23 @@ function wire() {
   });
 
   $('btn-cal-capture').addEventListener('click', captureCalibrationView);
+  $('btn-cal-auto').addEventListener('click', () => {
+    calState.autoCapture = !calState.autoCapture;
+    const b = $('btn-cal-auto');
+    b.textContent = `Auto-capture: ${calState.autoCapture ? 'ON' : 'OFF'}`;
+    b.classList.toggle('primary', calState.autoCapture);
+  });
   $('btn-cal-solve').addEventListener('click', solveCalibration);
   $('btn-cal-reset').addEventListener('click', () => {
     state.calViews = [];
     state.calResult = null;
+    calState.tracker = null;
+    calState.sharpness = makeSharpnessGate();
     $('cal-result').hidden = true;
+    buildCoverageGrid(CAL_GRID);
+    renderCoverage();
     updateCalUi();
+    setGuidance('Sweep the board around the frame');
   });
   $('btn-cal-save').addEventListener('click', saveCalibration);
   $('btn-cal-discard').addEventListener('click', () => {
@@ -893,6 +1063,16 @@ function wire() {
     } catch (e) {
       showError(e.message);
     }
+  });
+
+  $('btn-set-qr-default').addEventListener('click', async () => {
+    const mm = Number($('qr-default-mm').value);
+    if (!Number.isFinite(mm) || mm <= 0) {
+      showError('Enter a positive size in millimetres.');
+      return;
+    }
+    await store.setMeta('defaultQrSizeMm', mm);
+    await renderDiagnostics();
   });
 
   $('btn-export-all').addEventListener('click', async () => {

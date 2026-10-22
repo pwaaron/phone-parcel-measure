@@ -366,19 +366,29 @@ function detectFallback(gray, width, height, jsQrFn, opts = {}) {
  *   barcodeDetector — constructor to use; defaults to the global if present
  *   jsQrFn          — fallback decoder; defaults to the global if present
  *   preferNative    (default true)
- *   expectedSizeMm  — if given, codes whose payload omits a size inherit it
- *   sizeRegistry    — Map of id -> sizeMm, for codes whose payload omits a size
+ *   defaultSizeMm   — size applied to any code that does not carry one
+ *   sizeRegistry    — Map of key -> sizeMm, for codes whose payload omits a size
  *
- * Returns [{ text, corners, source, id, sizeMm }] with corners ordered
- * top-left, top-right, bottom-right, bottom-left — the order the measurement
- * code assumes when building the object-frame correspondences.
+ * Size resolution, most specific first:
+ *   1. the SPXM payload's own sizeMm
+ *   2. a size remembered against this exact payload
+ *   3. the caller's default (the user's "all my labels are 40 mm" setting)
+ *
+ * Tier 3 is what makes ARBITRARY QR codes usable. Any code works as a ruler so
+ * long as its printed size is known, and for parcels the payload is a different
+ * tracking number every time — so remembering sizes per payload would mean
+ * re-typing the size for every parcel. A single default covers the whole run.
+ *
+ * Returns [{ text, corners, source, id, sizeMm, payloadOk, sizeSource }] with
+ * corners ordered top-left, top-right, bottom-right, bottom-left — the order the
+ * measurement code assumes when building the object-frame correspondences.
  */
 export async function detectQrCodes(gray, width, height, opts = {}) {
   const {
     barcodeDetector = (typeof globalThis !== 'undefined' ? globalThis.BarcodeDetector : null),
     jsQrFn = (typeof globalThis !== 'undefined' ? globalThis.jsQR : null),
     preferNative = true,
-    expectedSizeMm = null,
+    defaultSizeMm = null,
     sizeRegistry = null,
   } = opts;
 
@@ -403,14 +413,21 @@ export async function detectQrCodes(gray, width, height, opts = {}) {
 
   return raw.map((r) => {
     const parsed = parseQrPayload(r.text);
-    let sizeMm = parsed ? parsed.sizeMm : null;
-    let id = parsed ? parsed.id : null;
+    // Any code is identified by its own payload, so a remembered size can be
+    // attached to an ordinary QR just as well as to one of ours.
+    const id = parsed ? parsed.id : (r.text || '').slice(0, 64);
 
-    // Fall back to a remembered size for this code, then to the caller default.
+    let sizeMm = parsed ? parsed.sizeMm : null;
+    let sizeSource = parsed ? 'payload' : null;
+
     if (sizeMm === null && id && sizeRegistry && sizeRegistry.has(id)) {
       sizeMm = sizeRegistry.get(id);
+      sizeSource = 'remembered';
     }
-    if (sizeMm === null && expectedSizeMm) sizeMm = expectedSizeMm;
+    if (sizeMm === null && Number.isFinite(defaultSizeMm) && defaultSizeMm > 0) {
+      sizeMm = defaultSizeMm;
+      sizeSource = 'default';
+    }
 
     return {
       text: r.text,
@@ -418,6 +435,7 @@ export async function detectQrCodes(gray, width, height, opts = {}) {
       source: r.source,
       id,
       sizeMm,
+      sizeSource,
       payloadOk: !!parsed,
     };
   });
